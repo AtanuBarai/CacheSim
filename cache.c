@@ -124,7 +124,8 @@ void perform_access(addr, access_type)
                 : (cache_stat_data.accesses + 1);
         cache_stat_inst.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_inst.accesses + 1)
                 : (cache_stat_inst.accesses);
-        if(c1.LRU_head[index] == NULL) // cache miss
+        
+        if(c1.LRU_head[index] == NULL) // cache miss not replacement
         {
             c1.LRU_head[index] = (Pcache_line)malloc(sizeof(cache_line));
             c1.LRU_head[index]->tag = newtag;
@@ -144,10 +145,17 @@ void perform_access(addr, access_type)
             }
             else //miss
             {
-                if(access_type != TRACE_DATA_STORE)
-                {
-                    if(c1.LRU_head[index]->dirty == 1)
+                if(c1.LRU_head[index]->dirty == 1)
                         cache_stat_data.copies_back++;
+                if(access_type == TRACE_INST_LOAD)
+                {
+                    cache_stat_inst.misses++;
+                    cache_stat_inst.replacements++;
+                }
+                else
+                {                    
+                    cache_stat_data.misses++;
+                    cache_stat_data.replacements++;
                 }
             }
         }
