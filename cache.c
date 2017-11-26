@@ -88,11 +88,14 @@ void init_cache()
     c1.index_mask_offset = LOG2(cache_block_size);        
     c1.index_mask = (0xffffffff) >> c1.index_mask_offset;
     c1.index_mask = (c1.n_sets - 1) << c1.index_mask_offset;
-    c1.LRU_head = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);        
+    c1.LRU_head = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);
+    c1.set_contents = (int *)malloc(sizeof(int)*c1.n_sets);
     for(i=0; i<c1.n_sets; i++)
     {
       c1.LRU_head[i] = NULL;
+      c1.set_contents[i] = 0;
     }
+    c1.contents = 0;
   }
   
   /*Cache statics initialization*/
@@ -124,44 +127,65 @@ void perform_access(addr, access_type)
         : (cache_stat_data.accesses + 1);
     cache_stat_inst.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_inst.accesses + 1)
         : (cache_stat_inst.accesses);
-      
-    if(c1.LRU_head[index] == NULL) // cache miss not replacement
-    {
-        c1.LRU_head[index] = (Pcache_line)malloc(sizeof(cache_line));
-        c1.LRU_head[index]->tag = newtag;
-        if(access_type == TRACE_DATA_LOAD || access_type == TRACE_DATA_STORE)
-          cache_stat_data.misses++;
-        else if(access_type == TRACE_INST_LOAD)
-          cache_stat_inst.misses++;
+    //Adding associativity support
 
+    if(c1.LRU_head[index] == NULL || c1.set_contents[index] < c1.associativity) // cache miss not replacement
+    {
+      c1.set_contents[index]++;
+      c1.contents++;
+      Pcache_line item = (Pcache_line)malloc(sizeof(cache_line));
+      item->tag = newtag;
+      item->LRU_next = NULL;
+      //if(c1.LRU_head[index] == NULL)
+        //c1.LRU_head[index] = item;
+      //else
+        insert(c1.LRU_head[index], c1.LRU_head[index]->LRU_next, item);
+      
+      
+      
+      if(access_type == TRACE_DATA_LOAD || access_type == TRACE_DATA_STORE)
+      {
+        cache_stat_data.misses++;
+        cache_stat_data.demand_fetches+=words_per_block;
+        if(access_type == TRACE_DATA_STORE)
+          c1.LRU_head[index]->dirty = TRUE;
+      }
+      else if(access_type == TRACE_INST_LOAD)
+      {
+        cache_stat_inst.misses++;
+        cache_stat_inst.demand_fetches+=words_per_block;
+      }
     }
-    else
+    
+    else // cache set is full
     {
       if(c1.LRU_head[index]->tag == newtag) //hit
       {
         if(access_type == TRACE_DATA_STORE)
         {
-          c1.LRU_head[index]->dirty = 1;
+          c1.LRU_head[index]->dirty = TRUE;
         }
       }
       else //miss
       {
         c1.LRU_head[index]->tag = newtag;
-        if(c1.LRU_head[index]->dirty == 1)
+        if(c1.LRU_head[index]->dirty == TRUE)
         {
-          cache_stat_data.copies_back++;
-          c1.LRU_head[index]->dirty = 0;
-
+          cache_stat_data.copies_back+=words_per_block;
+          if(access_type != TRACE_DATA_STORE)
+            c1.LRU_head[index]->dirty = FALSE;
         }
         if(access_type == TRACE_INST_LOAD)
         {
           cache_stat_inst.misses++;
           cache_stat_inst.replacements++;
+          cache_stat_inst.demand_fetches+=words_per_block;
         }
         else
         {                    
           cache_stat_data.misses++;
           cache_stat_data.replacements++;
+          cache_stat_data.demand_fetches+=words_per_block;
         }
       }
     }
@@ -170,16 +194,24 @@ void perform_access(addr, access_type)
   {
       
   }
-
 }
 /************************************************************/
 
 /************************************************************/
 void flush()
 {
-
+  unsigned i;
   /* flush the cache */
-
+  
+  for(i=0; i<c1.n_sets; i++)
+  { 
+    if(c1.LRU_head[i] != NULL)
+      if(c1.LRU_head[i]->dirty == TRUE)
+      {
+        cache_stat_data.copies_back+=words_per_block;      
+      }
+  }
+  
 }
 /************************************************************/
 
