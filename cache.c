@@ -89,10 +89,12 @@ void init_cache()
     c1.index_mask = (0xffffffff) >> c1.index_mask_offset;
     c1.index_mask = (c1.n_sets - 1) << c1.index_mask_offset;
     c1.LRU_head = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);
+    c1.LRU_tail = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);
     c1.set_contents = (int *)malloc(sizeof(int)*c1.n_sets);
     for(i=0; i<c1.n_sets; i++)
     {
       c1.LRU_head[i] = NULL;
+      c1.LRU_tail[i] = NULL;
       c1.set_contents[i] = 0;
     }
     c1.contents = 0;
@@ -118,30 +120,31 @@ void perform_access(addr, access_type)
   unsigned addr, access_type;
 {
   int index, newtag;
+  Pcache_line item;
   newtag = addr >> (c1.index_mask_offset + LOG2(c1.n_sets));
   /* handle an access to the cache */
+  index = (addr & c1.index_mask) >> c1.index_mask_offset;
+  cache_stat_data.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_data.accesses)
+      : (cache_stat_data.accesses + 1);
+  cache_stat_inst.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_inst.accesses + 1)
+      : (cache_stat_inst.accesses);
   if(cache_split == 0)
   {
-    index = (addr & c1.index_mask) >> c1.index_mask_offset;
-    cache_stat_data.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_data.accesses)
-        : (cache_stat_data.accesses + 1);
-    cache_stat_inst.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_inst.accesses + 1)
-        : (cache_stat_inst.accesses);
     //Adding associativity support
 
-    if(c1.LRU_head[index] == NULL || c1.set_contents[index] < c1.associativity) // cache miss not replacement
+    if(c1.LRU_head[index] == NULL) // first item in cache set
     {
+     
       c1.set_contents[index]++;
       c1.contents++;
-      Pcache_line item = (Pcache_line)malloc(sizeof(cache_line));
+      item = (Pcache_line)malloc(sizeof(cache_line));
+      
       item->tag = newtag;
       item->LRU_next = NULL;
-      //if(c1.LRU_head[index] == NULL)
-        //c1.LRU_head[index] = item;
-      //else
-        insert(c1.LRU_head[index], c1.LRU_head[index]->LRU_next, item);
-      
-      
+      item->LRU_prev = NULL;
+      item->dirty=FALSE;
+      c1.LRU_head[index] = item;
+      c1.LRU_tail[index] = item;
       
       if(access_type == TRACE_DATA_LOAD || access_type == TRACE_DATA_STORE)
       {
@@ -156,36 +159,61 @@ void perform_access(addr, access_type)
         cache_stat_inst.demand_fetches+=words_per_block;
       }
     }
-    
-    else // cache set is full
+    else 
     {
-      if(c1.LRU_head[index]->tag == newtag) //hit
+      item = c1.LRU_head[index];
+      while(item != NULL)
+      {        
+        if(item->tag == newtag)
+        {
+          break;
+        }
+        item = item->LRU_next;
+      }
+      
+      if(item == NULL) // miss
+      {
+        item = (Pcache_line)malloc(sizeof(cache_line));
+        item->tag = newtag;
+        item->LRU_next = NULL;
+        item->LRU_prev = NULL;
+        item->dirty = FALSE;
+
+        if(c1.set_contents[index] < c1.associativity) // cache line is not full
+        {
+          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
+          c1.set_contents[index]++;
+        }
+        else //cache is full; delete the tail, insert in the head
+        {
+          if(c1.LRU_tail[index]->dirty == TRUE) // if the tail is dirty then copy back
+            cache_stat_data.copies_back+=words_per_block;          
+          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
+          
+          delete(&c1.LRU_head[index], &c1.LRU_tail[index], c1.LRU_tail[index]);
+          if(access_type == TRACE_INST_LOAD)
+            cache_stat_inst.replacements++;
+          else
+            cache_stat_data.replacements++;
+        }
+        if(access_type == TRACE_INST_LOAD)
+        {
+          cache_stat_inst.misses++;          
+          cache_stat_inst.demand_fetches+=words_per_block;
+        }
+        else
+        {
+          cache_stat_data.misses++;          
+          cache_stat_data.demand_fetches+=words_per_block;
+          if(access_type == TRACE_DATA_STORE)
+            c1.LRU_head[index]->dirty = TRUE;           
+        }
+      }
+      else // hit
       {
         if(access_type == TRACE_DATA_STORE)
         {
           c1.LRU_head[index]->dirty = TRUE;
-        }
-      }
-      else //miss
-      {
-        c1.LRU_head[index]->tag = newtag;
-        if(c1.LRU_head[index]->dirty == TRUE)
-        {
-          cache_stat_data.copies_back+=words_per_block;
-          if(access_type != TRACE_DATA_STORE)
-            c1.LRU_head[index]->dirty = FALSE;
-        }
-        if(access_type == TRACE_INST_LOAD)
-        {
-          cache_stat_inst.misses++;
-          cache_stat_inst.replacements++;
-          cache_stat_inst.demand_fetches+=words_per_block;
-        }
-        else
-        {                    
-          cache_stat_data.misses++;
-          cache_stat_data.replacements++;
-          cache_stat_data.demand_fetches+=words_per_block;
         }
       }
     }
@@ -202,16 +230,20 @@ void flush()
 {
   unsigned i;
   /* flush the cache */
-  
+  Pcache_line item;
   for(i=0; i<c1.n_sets; i++)
-  { 
-    if(c1.LRU_head[i] != NULL)
-      if(c1.LRU_head[i]->dirty == TRUE)
+  {
+    item = c1.LRU_head[i];
+    while(item != NULL)
+    {
+      if(item->dirty == TRUE)
       {
-        cache_stat_data.copies_back+=words_per_block;      
+        cache_stat_data.copies_back+=words_per_block;  
+        item->dirty = FALSE;    
       }
+      item = item->LRU_next;
+    }
   }
-  
 }
 /************************************************************/
 
@@ -232,7 +264,7 @@ void delete(head, tail, item)
   } else {
     /* item at tail */
     *tail = item->LRU_prev;
-  }
+  }  
 }
 /************************************************************/
 
@@ -242,14 +274,13 @@ void insert(head, tail, item)
   Pcache_line *head, *tail;
   Pcache_line item;
 {
+  
   item->LRU_next = *head;
   item->LRU_prev = (Pcache_line)NULL;
-
   if (item->LRU_next)
     item->LRU_next->LRU_prev = item;
   else
     *tail = item;
-
   *head = item;
 }
 /************************************************************/
