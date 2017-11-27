@@ -188,8 +188,7 @@ void perform_access(addr, access_type)
         {
           if(c1.LRU_tail[index]->dirty == TRUE) // if the tail is dirty then copy back
             cache_stat_data.copies_back+=words_per_block;          
-          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
-          
+          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);          
           delete(&c1.LRU_head[index], &c1.LRU_tail[index], c1.LRU_tail[index]);
           if(access_type == TRACE_INST_LOAD)
             cache_stat_inst.replacements++;
@@ -211,6 +210,8 @@ void perform_access(addr, access_type)
       }
       else // hit
       {
+        delete(&c1.LRU_head[index], &c1.LRU_tail[index], item);
+        insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
         if(access_type == TRACE_DATA_STORE)
         {
           c1.LRU_head[index]->dirty = TRUE;
