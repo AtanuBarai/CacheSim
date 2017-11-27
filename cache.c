@@ -22,8 +22,7 @@ static int cache_writeback = DEFAULT_CACHE_WRITEBACK;
 static int cache_writealloc = DEFAULT_CACHE_WRITEALLOC;
 
 /* cache model data structures */
-static Pcache icache;
-static Pcache dcache;
+static Pcache pcache; //pointer to cache
 static cache c1;
 static cache c2;
 static cache_stat cache_stat_inst;
@@ -99,7 +98,43 @@ void init_cache()
     }
     c1.contents = 0;
   }
-  
+  else
+  {
+    c1.size = cache_dsize;
+    c1.associativity = cache_assoc;
+    c1.n_sets = (cache_dsize / (cache_assoc * cache_block_size));
+    c1.index_mask_offset = LOG2(cache_block_size);
+    c1.index_mask = (0xffffffff) >> c1.index_mask_offset;
+    c1.index_mask = (c1.n_sets - 1) << c1.index_mask_offset;
+    c1.LRU_head = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);
+    c1.LRU_tail = (Pcache_line *)malloc(sizeof(Pcache_line)*c1.n_sets);
+    c1.set_contents = (int *)malloc(sizeof(int)*c1.n_sets);
+    for(i=0; i<c1.n_sets; i++)
+    {
+      c1.LRU_head[i] = NULL;
+      c1.LRU_tail[i] = NULL;
+      c1.set_contents[i] = 0;
+    }
+    c1.contents = 0;
+
+    c2.size = cache_isize;
+    c2.associativity = cache_assoc;
+    c2.n_sets = (cache_isize / (cache_assoc * cache_block_size));
+    c2.index_mask_offset = LOG2(cache_block_size);
+    c2.index_mask = (0xffffffff) >> c2.index_mask_offset;
+    c2.index_mask = (c2.n_sets - 1) << c2.index_mask_offset;
+    c2.LRU_head = (Pcache_line *)malloc(sizeof(Pcache_line)*c2.n_sets);
+    c2.LRU_tail = (Pcache_line *)malloc(sizeof(Pcache_line)*c2.n_sets);
+    c2.set_contents = (int *)malloc(sizeof(int)*c2.n_sets);
+    for(i=0; i<c1.n_sets; i++)
+    {
+      c2.LRU_head[i] = NULL;
+      c2.LRU_tail[i] = NULL;
+      c2.set_contents[i] = 0;
+    }
+    c2.contents = 0;
+    
+  }
   /*Cache statics initialization*/
   cache_stat_inst.accesses = 0;
   cache_stat_inst.misses = 0;
@@ -128,101 +163,116 @@ void perform_access(addr, access_type)
       : (cache_stat_data.accesses + 1);
   cache_stat_inst.accesses = (access_type == TRACE_INST_LOAD) ? (cache_stat_inst.accesses + 1)
       : (cache_stat_inst.accesses);
+
   if(cache_split == 0)
   {
-    //Adding associativity support
-
-    if(c1.LRU_head[index] == NULL) // first item in cache set
-    {
-     
-      c1.set_contents[index]++;
-      c1.contents++;
-      item = (Pcache_line)malloc(sizeof(cache_line));
-      
-      item->tag = newtag;
-      item->LRU_next = NULL;
-      item->LRU_prev = NULL;
-      item->dirty=FALSE;
-      c1.LRU_head[index] = item;
-      c1.LRU_tail[index] = item;
-      
-      if(access_type == TRACE_DATA_LOAD || access_type == TRACE_DATA_STORE)
-      {
-        cache_stat_data.misses++;
-        cache_stat_data.demand_fetches+=words_per_block;
-        if(access_type == TRACE_DATA_STORE)
-          c1.LRU_head[index]->dirty = TRUE;
-      }
-      else if(access_type == TRACE_INST_LOAD)
-      {
-        cache_stat_inst.misses++;
-        cache_stat_inst.demand_fetches+=words_per_block;
-      }
-    }
-    else 
-    {
-      item = c1.LRU_head[index];
-      while(item != NULL)
-      {        
-        if(item->tag == newtag)
-        {
-          break;
-        }
-        item = item->LRU_next;
-      }
-      
-      if(item == NULL) // miss
-      {
-        item = (Pcache_line)malloc(sizeof(cache_line));
-        item->tag = newtag;
-        item->LRU_next = NULL;
-        item->LRU_prev = NULL;
-        item->dirty = FALSE;
-
-        if(c1.set_contents[index] < c1.associativity) // cache line is not full
-        {
-          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
-          c1.set_contents[index]++;
-        }
-        else //cache is full; delete the tail, insert in the head
-        {
-          if(c1.LRU_tail[index]->dirty == TRUE) // if the tail is dirty then copy back
-            cache_stat_data.copies_back+=words_per_block;          
-          insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);          
-          delete(&c1.LRU_head[index], &c1.LRU_tail[index], c1.LRU_tail[index]);
-          if(access_type == TRACE_INST_LOAD)
-            cache_stat_inst.replacements++;
-          else
-            cache_stat_data.replacements++;
-        }
-        if(access_type == TRACE_INST_LOAD)
-        {
-          cache_stat_inst.misses++;          
-          cache_stat_inst.demand_fetches+=words_per_block;
-        }
-        else
-        {
-          cache_stat_data.misses++;          
-          cache_stat_data.demand_fetches+=words_per_block;
-          if(access_type == TRACE_DATA_STORE)
-            c1.LRU_head[index]->dirty = TRUE;           
-        }
-      }
-      else // hit
-      {
-        delete(&c1.LRU_head[index], &c1.LRU_tail[index], item);
-        insert(&c1.LRU_head[index], &c1.LRU_tail[index], item);
-        if(access_type == TRACE_DATA_STORE)
-        {
-          c1.LRU_head[index]->dirty = TRUE;
-        }
-      }
-    }
+    pcache = &c1;
   }
   else
   {
-      
+    if(access_type == TRACE_INST_LOAD)
+      pcache = &c2;
+    else
+      pcache = &c1;
   }
+
+  if(pcache->LRU_head[index] == NULL) // first item in cache set
+  {     
+    pcache->set_contents[index]++;
+    pcache->contents++;
+    item = (Pcache_line)malloc(sizeof(cache_line));
+    
+    item->tag = newtag;
+    item->LRU_next = NULL;
+    item->LRU_prev = NULL;
+    item->dirty=FALSE;
+    pcache->LRU_head[index] = item;
+    pcache->LRU_tail[index] = item;
+    
+    if(access_type == TRACE_DATA_LOAD || access_type == TRACE_DATA_STORE)
+    {
+      cache_stat_data.misses++;
+      cache_stat_data.demand_fetches+=words_per_block;
+      if(access_type == TRACE_DATA_STORE)
+      {
+        if(cache_writeback == TRUE)
+          pcache->LRU_head[index]->dirty = TRUE;
+        else
+          cache_stat_data.copies_back+=words_per_block;
+      }
+    }
+    else if(access_type == TRACE_INST_LOAD)
+    {
+      cache_stat_inst.misses++;
+      cache_stat_inst.demand_fetches+=words_per_block;
+    }
+  }
+  else 
+  {
+    item = pcache->LRU_head[index];
+    while(item != NULL)
+    {        
+      if(item->tag == newtag)
+        break;        
+      item = item->LRU_next;
+    }
+    
+    if(item == NULL) // miss
+    {
+      item = (Pcache_line)malloc(sizeof(cache_line));
+      item->tag = newtag;
+      item->LRU_next = NULL;
+      item->LRU_prev = NULL;
+      item->dirty = FALSE;
+
+      if(pcache->set_contents[index] < pcache->associativity) // cache line is not full
+      {
+        insert(&pcache->LRU_head[index], &pcache->LRU_tail[index], item);
+        pcache->set_contents[index]++;
+      }
+      else //cache is full; delete the tail, insert in the head
+      {
+        if(pcache->LRU_tail[index]->dirty == TRUE) // if the tail is dirty then copy back
+          cache_stat_data.copies_back+=words_per_block;          
+        insert(&pcache->LRU_head[index], &pcache->LRU_tail[index], item);          
+        delete(&pcache->LRU_head[index], &pcache->LRU_tail[index], pcache->LRU_tail[index]);
+        if(access_type == TRACE_INST_LOAD)
+          cache_stat_inst.replacements++;
+        else
+          cache_stat_data.replacements++;
+      }
+      if(access_type == TRACE_INST_LOAD)
+      {
+        cache_stat_inst.misses++;          
+        cache_stat_inst.demand_fetches+=words_per_block;
+      }
+      else
+      {
+        cache_stat_data.misses++;          
+        cache_stat_data.demand_fetches+=words_per_block;
+        if(access_type == TRACE_DATA_STORE)
+        {
+          if(cache_writeback == TRUE)
+            pcache->LRU_head[index]->dirty = TRUE;
+          else
+            cache_stat_data.copies_back+=words_per_block;
+        }
+      }
+    }
+    else // hit
+    {
+      delete(&pcache->LRU_head[index], &pcache->LRU_tail[index], item);
+      insert(&pcache->LRU_head[index], &pcache->LRU_tail[index], item);
+      if(access_type == TRACE_DATA_STORE)
+      {
+        if(cache_writeback == TRUE)
+          pcache->LRU_head[index]->dirty = TRUE;
+        else
+          cache_stat_data.copies_back+=words_per_block;
+      }
+    }
+  }
+  
 }
 /************************************************************/
 
