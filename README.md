@@ -3,6 +3,8 @@ Simple Trace-driven Cache Simulator in C.
 
 It is a implementation of cache described in http://www.cs.umd.edu/class/spring2012/cmsc411/p1/
 
+Code skeleton taken from http://www.cs.umd.edu/class/spring2012/cmsc411/p1/
+
 The type of simulator is known as a trace-driven simulator because it takes as input a memory references trace.
 The trace, which is also uploaded here, was acquired on another machine.
 In this implementation, the memory reference events specified in the trace(s) is used by the simulator 
